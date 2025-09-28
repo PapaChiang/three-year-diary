@@ -6,7 +6,7 @@
 # 如果還沒有 GitHub 倉庫，先建立一個
 # 然後執行以下指令：
 
-git remote add origin https://github.com/你的用戶名/三年日記.git
+git remote add origin https://github.com/PapaChiang/three-year-diary.git
 git branch -M main
 git push -u origin main
 ```

@@ -4,14 +4,14 @@
 
 ## 🚀 快速部署
 
-### 一鍵部署到 Vercel
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/你的用戶名/三年日記)
+### 一鍵部署到 Railway (推薦)
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/PapaChiang/three-year-diary)
 
-### 一鍵部署到 Railway
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/你的用戶名/三年日記)
+### 一鍵部署到 Vercel
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/PapaChiang/three-year-diary)
 
 ### 一鍵部署到 Render
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/PapaChiang/three-year-diary)
 
 ## 功能特色
 
