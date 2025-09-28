@@ -1,7 +1,7 @@
 // Google OAuth 設定
 const GOOGLE_CONFIG = {
     // 請替換為你的 Google Client ID
-    CLIENT_ID: 'YOUR_GOOGLE_CLIENT_ID_HERE',
+    CLIENT_ID: '437493976435-fe5de3r309f68vabbogr59vgnsbt00t3.apps.googleusercontent.com',
     
     // 開發環境可以使用這個測試 Client ID (僅供測試，請勿用於生產環境)
     // 或者設定你自己的 Client ID

@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const Database = require('better-sqlite3');
+const sqlite3 = require('sqlite3').verbose();
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 require('dotenv').config();
@@ -29,24 +29,32 @@ app.get('/', (req, res) => {
 });
 
 // 資料庫初始化
-let db;
-try {
-    db = new Database('diary.db');
-    console.log('✅ 資料庫連接成功');
-    
-    // 建立資料表
+const db = new sqlite3.Database(':memory:', (err) => {
+    if (err) {
+        console.error('資料庫連接失敗:', err);
+        // 不要立即退出，讓應用繼續運行
+    } else {
+        console.log('✅ 資料庫連接成功 (內存模式)');
+    }
+});
+
+// 建立資料表
+db.serialize(() => {
     // 用戶表
-    db.exec(`CREATE TABLE IF NOT EXISTS users (
+    db.run(`CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         google_id TEXT UNIQUE NOT NULL,
         email TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
         picture TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
+    )`, (err) => {
+        if (err) console.error('建立用戶表失敗:', err);
+        else console.log('✅ 用戶表建立完成');
+    });
 
     // 日記表
-    db.exec(`CREATE TABLE IF NOT EXISTS entries (
+    db.run(`CREATE TABLE IF NOT EXISTS entries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         date TEXT NOT NULL,
@@ -55,13 +63,11 @@ try {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users (id),
         UNIQUE(user_id, date)
-    )`);
-    
-    console.log('✅ 資料表建立完成');
-} catch (err) {
-    console.error('資料庫初始化失敗:', err);
-    process.exit(1);
-}
+    )`, (err) => {
+        if (err) console.error('建立日記表失敗:', err);
+        else console.log('✅ 日記表建立完成');
+    });
+});
 
 // JWT 驗證中間件
 const authenticateToken = (req, res, next) => {
@@ -119,52 +125,64 @@ app.post('/api/auth/google', async (req, res) => {
             ({ sub: googleId, email, name, picture } = payload);
         }
 
-        try {
-            // 檢查用戶是否已存在
-            const existingUser = db.prepare('SELECT * FROM users WHERE google_id = ? OR email = ?').get(googleId, email);
+        // 檢查用戶是否已存在
+        db.get(
+            'SELECT * FROM users WHERE google_id = ? OR email = ?',
+            [googleId, email],
+            function (err, existingUser) {
+                if (err) {
+                    console.error('查詢用戶失敗:', err);
+                    return res.status(500).json({ error: '伺服器錯誤' });
+                }
 
-            if (existingUser) {
-                // 用戶已存在，直接登入
-                const token = jwt.sign({
-                    id: existingUser.id,
-                    googleId: existingUser.google_id,
-                    email: existingUser.email
-                }, JWT_SECRET);
-
-                res.json({
-                    token,
-                    user: {
+                if (existingUser) {
+                    // 用戶已存在，直接登入
+                    const token = jwt.sign({
                         id: existingUser.id,
-                        name: existingUser.name,
-                        email: existingUser.email,
-                        picture: existingUser.picture
-                    }
-                });
-            } else {
-                // 新用戶，創建帳號
-                const insertUser = db.prepare('INSERT INTO users (google_id, email, name, picture) VALUES (?, ?, ?, ?)');
-                const result = insertUser.run(googleId, email, name, picture);
+                        googleId: existingUser.google_id,
+                        email: existingUser.email
+                    }, JWT_SECRET);
 
-                const token = jwt.sign({
-                    id: result.lastInsertRowid,
-                    googleId,
-                    email
-                }, JWT_SECRET);
+                    res.json({
+                        token,
+                        user: {
+                            id: existingUser.id,
+                            name: existingUser.name,
+                            email: existingUser.email,
+                            picture: existingUser.picture
+                        }
+                    });
+                } else {
+                    // 新用戶，創建帳號
+                    db.run(
+                        'INSERT INTO users (google_id, email, name, picture) VALUES (?, ?, ?, ?)',
+                        [googleId, email, name, picture],
+                        function (err) {
+                            if (err) {
+                                console.error('創建用戶失敗:', err);
+                                return res.status(500).json({ error: '創建用戶失敗' });
+                            }
 
-                res.json({
-                    token,
-                    user: {
-                        id: result.lastInsertRowid,
-                        name,
-                        email,
-                        picture
-                    }
-                });
+                            const token = jwt.sign({
+                                id: this.lastID,
+                                googleId,
+                                email
+                            }, JWT_SECRET);
+
+                            res.json({
+                                token,
+                                user: {
+                                    id: this.lastID,
+                                    name,
+                                    email,
+                                    picture
+                                }
+                            });
+                        }
+                    );
+                }
             }
-        } catch (dbError) {
-            console.error('資料庫操作錯誤:', dbError);
-            return res.status(500).json({ error: '伺服器錯誤' });
-        }
+        );
     } catch (error) {
         console.error('Google 認證錯誤:', error);
         res.status(400).json({ error: 'Google 認證失敗: ' + error.message });
@@ -173,103 +191,121 @@ app.post('/api/auth/google', async (req, res) => {
 
 // 獲取日記列表
 app.get('/api/entries', authenticateToken, (req, res) => {
-    try {
-        const { startDate, endDate } = req.query;
+    const { startDate, endDate } = req.query;
 
-        let query = 'SELECT date, content FROM entries WHERE user_id = ?';
-        let params = [req.user.id];
+    let query = 'SELECT date, content FROM entries WHERE user_id = ?';
+    let params = [req.user.id];
 
-        if (startDate && endDate) {
-            query += ' AND date BETWEEN ? AND ?';
-            params.push(startDate, endDate);
-        }
-
-        query += ' ORDER BY date DESC';
-
-        const entries = db.prepare(query).all(...params);
-        res.json(entries);
-    } catch (err) {
-        console.error('獲取日記失敗:', err);
-        return res.status(500).json({ error: '獲取日記失敗' });
+    if (startDate && endDate) {
+        query += ' AND date BETWEEN ? AND ?';
+        params.push(startDate, endDate);
     }
+
+    query += ' ORDER BY date DESC';
+
+    db.all(query, params, (err, entries) => {
+        if (err) {
+            console.error('獲取日記失敗:', err);
+            return res.status(500).json({ error: '獲取日記失敗' });
+        }
+        res.json(entries || []);
+    });
 });
 
 // 獲取特定日期的日記
 app.get('/api/entries/:date', authenticateToken, (req, res) => {
-    try {
-        const { date } = req.params;
-        const entry = db.prepare('SELECT content FROM entries WHERE user_id = ? AND date = ?').get(req.user.id, date);
-        res.json(entry || { content: '' });
-    } catch (err) {
-        console.error('獲取日記失敗:', err);
-        return res.status(500).json({ error: '獲取日記失敗' });
-    }
+    const { date } = req.params;
+
+    db.get(
+        'SELECT content FROM entries WHERE user_id = ? AND date = ?',
+        [req.user.id, date],
+        (err, entry) => {
+            if (err) {
+                console.error('獲取日記失敗:', err);
+                return res.status(500).json({ error: '獲取日記失敗' });
+            }
+            res.json(entry || { content: '' });
+        }
+    );
 });
 
 // 儲存或更新日記
 app.post('/api/entries', authenticateToken, (req, res) => {
-    try {
-        const { date, content } = req.body;
+    const { date, content } = req.body;
 
-        if (!date) {
-            return res.status(400).json({ error: '日期不能為空' });
-        }
-
-        if (!content || content.trim() === '') {
-            // 如果內容為空，刪除該日記
-            const deleteStmt = db.prepare('DELETE FROM entries WHERE user_id = ? AND date = ?');
-            deleteStmt.run(req.user.id, date);
-            res.json({ message: '日記已刪除' });
-            return;
-        }
-
-        const upsertStmt = db.prepare(`
-            INSERT OR REPLACE INTO entries (user_id, date, content, updated_at) 
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        `);
-        upsertStmt.run(req.user.id, date, content.trim());
-        
-        res.json({ message: '日記已儲存', date, content: content.trim() });
-    } catch (err) {
-        console.error('儲存日記失敗:', err);
-        return res.status(500).json({ error: '儲存日記失敗' });
+    if (!date) {
+        return res.status(400).json({ error: '日期不能為空' });
     }
+
+    if (!content || content.trim() === '') {
+        // 如果內容為空，刪除該日記
+        db.run(
+            'DELETE FROM entries WHERE user_id = ? AND date = ?',
+            [req.user.id, date],
+            function (err) {
+                if (err) {
+                    console.error('刪除日記失敗:', err);
+                    return res.status(500).json({ error: '刪除日記失敗' });
+                }
+                res.json({ message: '日記已刪除' });
+            }
+        );
+        return;
+    }
+
+    db.run(
+        `INSERT OR REPLACE INTO entries (user_id, date, content, updated_at) 
+         VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
+        [req.user.id, date, content.trim()],
+        function (err) {
+            if (err) {
+                console.error('儲存日記失敗:', err);
+                return res.status(500).json({ error: '儲存日記失敗' });
+            }
+            res.json({ message: '日記已儲存', date, content: content.trim() });
+        }
+    );
 });
 
 // 刪除日記
 app.delete('/api/entries/:date', authenticateToken, (req, res) => {
-    try {
-        const { date } = req.params;
-        const deleteStmt = db.prepare('DELETE FROM entries WHERE user_id = ? AND date = ?');
-        deleteStmt.run(req.user.id, date);
-        res.json({ message: '日記已刪除' });
-    } catch (err) {
-        console.error('刪除日記失敗:', err);
-        return res.status(500).json({ error: '刪除日記失敗' });
-    }
+    const { date } = req.params;
+
+    db.run(
+        'DELETE FROM entries WHERE user_id = ? AND date = ?',
+        [req.user.id, date],
+        function (err) {
+            if (err) {
+                console.error('刪除日記失敗:', err);
+                return res.status(500).json({ error: '刪除日記失敗' });
+            }
+            res.json({ message: '日記已刪除' });
+        }
+    );
 });
 
 // 獲取統計資訊
 app.get('/api/stats', authenticateToken, (req, res) => {
-    try {
-        const stats = db.prepare(`
-            SELECT 
-                COUNT(*) as total_entries,
-                MIN(date) as first_entry_date,
-                MAX(date) as last_entry_date,
-                strftime('%Y', date) as year,
-                COUNT(*) as entries_per_year
-             FROM entries 
-             WHERE user_id = ? 
-             GROUP BY strftime('%Y', date)
-             ORDER BY year DESC
-        `).all(req.user.id);
-        
-        res.json(stats);
-    } catch (err) {
-        console.error('獲取統計失敗:', err);
-        return res.status(500).json({ error: '獲取統計失敗' });
-    }
+    db.all(
+        `SELECT 
+            COUNT(*) as total_entries,
+            MIN(date) as first_entry_date,
+            MAX(date) as last_entry_date,
+            strftime('%Y', date) as year,
+            COUNT(*) as entries_per_year
+         FROM entries 
+         WHERE user_id = ? 
+         GROUP BY strftime('%Y', date)
+         ORDER BY year DESC`,
+        [req.user.id],
+        (err, stats) => {
+            if (err) {
+                console.error('獲取統計失敗:', err);
+                return res.status(500).json({ error: '獲取統計失敗' });
+            }
+            res.json(stats || []);
+        }
+    );
 });
 
 // 全域錯誤處理
@@ -286,6 +322,8 @@ app.use((req, res) => {
 const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`✅ 伺服器成功啟動在 port ${PORT}`);
     console.log(`🌍 環境: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔑 JWT_SECRET 已設定: ${JWT_SECRET ? '是' : '否'}`);
+    console.log(`📱 Google Client ID 已設定: ${GOOGLE_CLIENT_ID ? '是' : '否'}`);
 });
 
 // 優雅關閉
