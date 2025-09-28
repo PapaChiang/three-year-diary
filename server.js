@@ -10,6 +10,14 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 
+// 調試信息
+console.log('🚀 應用程式啟動中...');
+console.log(`📊 環境變數檢查:`);
+console.log(`   PORT: ${PORT}`);
+console.log(`   NODE_ENV: ${process.env.NODE_ENV || 'development'}`);
+console.log(`   JWT_SECRET: ${JWT_SECRET ? '已設定' : '未設定'}`);
+console.log(`   GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID ? '已設定' : '未設定'}`);
+
 // Google OAuth 客戶端
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
@@ -20,7 +28,13 @@ app.use(express.static('.'));
 
 // 健康檢查端點
 app.get('/health', (req, res) => {
-    res.json({ status: 'OK', timestamp: new Date().toISOString() });
+    res.json({ 
+        status: 'OK', 
+        timestamp: new Date().toISOString(),
+        port: PORT,
+        env: process.env.NODE_ENV || 'development',
+        uptime: process.uptime()
+    });
 });
 
 // 根路徑重定向到首頁
@@ -319,21 +333,57 @@ app.use((req, res) => {
     res.status(404).json({ error: '找不到頁面' });
 });
 
-const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`✅ 伺服器成功啟動在 port ${PORT}`);
+// Railway 需要監聽特定的 host 和 port
+const HOST = process.env.HOST || '0.0.0.0';
+const server = app.listen(PORT, HOST, () => {
+    console.log(`✅ 伺服器成功啟動`);
+    console.log(`🌐 Host: ${HOST}`);
+    console.log(`🔌 Port: ${PORT}`);
     console.log(`🌍 環境: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🔑 JWT_SECRET 已設定: ${JWT_SECRET ? '是' : '否'}`);
     console.log(`📱 Google Client ID 已設定: ${GOOGLE_CLIENT_ID ? '是' : '否'}`);
 });
 
+// 錯誤處理
+server.on('error', (err) => {
+    console.error('伺服器錯誤:', err);
+    if (err.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} 已被使用`);
+    } else if (err.code === 'EACCES') {
+        console.error(`❌ 沒有權限監聽 port ${PORT}`);
+    }
+});
+
 // 優雅關閉
 process.on('SIGTERM', () => {
-    console.log('收到 SIGTERM 信號，正在關閉伺服器...');
+    console.log('📴 收到 SIGTERM 信號，正在關閉伺服器...');
     server.close(() => {
-        console.log('伺服器已關閉');
+        console.log('✅ 伺服器已關閉');
         if (db) {
             db.close();
         }
         process.exit(0);
     });
+});
+
+process.on('SIGINT', () => {
+    console.log('📴 收到 SIGINT 信號，正在關閉伺服器...');
+    server.close(() => {
+        console.log('✅ 伺服器已關閉');
+        if (db) {
+            db.close();
+        }
+        process.exit(0);
+    });
+});
+
+// 未捕獲的異常處理
+process.on('uncaughtException', (err) => {
+    console.error('❌ 未捕獲的異常:', err);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ 未處理的 Promise 拒絕:', reason);
+    process.exit(1);
 });
