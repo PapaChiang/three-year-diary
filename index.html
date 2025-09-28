@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>三年日記</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="config.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>三年日記</h1>
+            <nav class="view-nav">
+                <button class="nav-btn active" data-view="today">今天</button>
+                <button class="nav-btn" data-view="daily">三年對比</button>
+                <button class="nav-btn" data-view="weekly">週檢視</button>
+                <button class="nav-btn" data-view="monthly">習慣追蹤</button>
+            </nav>
+            <div class="user-info" id="userInfo">
+                <span id="userName"></span>
+                <button class="logout-btn" id="logoutBtn">登出</button>
+            </div>
+        </header>
+
+        <!-- 今天檢視 -->
+        <main id="todayView" class="view-content active">
+            <div class="date-display" id="currentDate"></div>
+
+            <!-- 結構化日記表單 -->
+            <div class="structured-diary">
+                <div class="diary-section">
+                    <h3>📝 今天的日記</h3>
+
+                    <div class="diary-field">
+                        <label>✨ 3個讓你覺得不錯的片刻</label>
+                        <textarea id="goodMoments" placeholder="1. &#10;2. &#10;3. "></textarea>
+                    </div>
+
+                    <div class="diary-field">
+                        <label>🏆 今天的成就感（不是行程，而是感受）</label>
+                        <textarea id="achievements" placeholder="描述今天讓你有成就感的事情和感受..."></textarea>
+                    </div>
+
+                    <div class="diary-field">
+                        <label>🙏 感恩清單</label>
+                        <textarea id="gratitude" placeholder="今天感謝的人、事、物..."></textarea>
+                    </div>
+
+                    <div class="diary-field">
+                        <label>📚 學到的東西</label>
+                        <textarea id="learnings" placeholder="今天學到的新知識、新體悟..."></textarea>
+                    </div>
+
+                    <div class="diary-field">
+                        <label>🔮 給明年今天的自己</label>
+                        <textarea id="futureNote" placeholder="用未來視角寫給明年今天的自己..."></textarea>
+                    </div>
+
+                    <div class="diary-actions">
+                        <button id="saveBtn" class="save-btn">💾 儲存日記</button>
+                        <button id="clearBtn" class="clear-btn">🗑️ 清空</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 歷史日記 -->
+            <div class="history-section">
+                <h3>📖 歷史回顧</h3>
+
+                <div class="history-item">
+                    <h4>去年的今天</h4>
+                    <div id="lastYearEntry" class="history-entry">
+                        <p class="no-entry">去年的今天還沒有日記記錄</p>
+                    </div>
+                </div>
+
+                <div class="history-item">
+                    <h4>前年的今天</h4>
+                    <div id="twoYearsAgoEntry" class="history-entry">
+                        <p class="no-entry">前年的今天還沒有日記記錄</p>
+                    </div>
+                </div>
+
+                <div class="history-item">
+                    <h4>明年今天的期許</h4>
+                    <div id="nextYearEntry" class="history-entry">
+                        <p class="no-entry">還沒有寫給明年的訊息</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- 日檢視 -->
+        <main id="dailyView" class="view-content">
+            <div class="view-controls">
+                <button id="prevDay" title="前一天">‹ 前一天</button>
+                <span id="dailyDate"></span>
+                <button id="nextDay" title="後一天">後一天 ›</button>
+            </div>
+            <div id="dailyContent" class="daily-timeline-container"></div>
+        </main>
+
+        <!-- 週檢視 -->
+        <main id="weeklyView" class="view-content">
+            <div class="view-controls">
+                <button id="prevWeek">‹</button>
+                <span id="weeklyDate"></span>
+                <button id="nextWeek">›</button>
+            </div>
+            <div id="weeklyContent" class="weekly-container"></div>
+        </main>
+
+        <!-- 月檢視 -->
+        <main id="monthlyView" class="view-content">
+            <div class="view-controls">
+                <button id="prevMonth">‹</button>
+                <span id="monthlyDate"></span>
+                <button id="nextMonth">›</button>
+            </div>
+            <div id="monthlyContent" class="monthly-container-wrapper"></div>
+        </main>
+    </div>
+
+    <!-- 登入模態框 -->
+    <div id="loginModal" class="modal">
+        <div class="modal-content">
+            <h2>歡迎使用三年日記</h2>
+            <p class="login-description">請使用 Google 帳號登入來開始記錄你的生活</p>
+            <div class="google-login-container" id="googleLoginContainer">
+                <!-- Google 登入按鈕會動態載入 -->
+            </div>
+
+            <!-- 測試模式登入 -->
+            <div class="test-login-container" id="testLoginContainer" style="display: none;">
+                <p class="test-mode-notice">測試模式 - 請設定 Google Client ID</p>
+                <button id="testLoginBtn" class="test-login-btn">測試登入</button>
+            </div>
+            <div class="error-message" id="loginError"></div>
+        </div>
+    </div>
+
+    <!-- 載入指示器 -->
+    <div id="loadingIndicator" class="loading">
+        <div class="spinner"></div>
+        <span>載入中...</span>
+    </div>
+
+    <script src="api.js"></script>
+    <script src="script.js"></script>
+    <script>
+        function loadGoogleScript() {
+            const script = document.createElement('script');
+            script.src = 'https://accounts.google.com/gsi/client';
+            script.async = true;
+            script.defer = true;
+            script.onload = function () {
+                if (window.diary && window.diary.initGoogleLogin) {
+                    window.diary.initGoogleLogin();
+                } else {
+                    setTimeout(() => {
+                        if (window.diary && window.diary.initGoogleLogin) {
+                            window.diary.initGoogleLogin();
+                        }
+                    }, 100);
+                }
+            };
+            document.head.appendChild(script);
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(loadGoogleScript, 500);
+        });
+    </script>
+</body>
+
+</html>
