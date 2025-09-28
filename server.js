@@ -33,7 +33,8 @@ app.get('/health', (req, res) => {
         timestamp: new Date().toISOString(),
         port: PORT,
         env: process.env.NODE_ENV || 'development',
-        uptime: process.uptime()
+        uptime: process.uptime(),
+        database: db ? 'connected' : 'initializing'
     });
 });
 
@@ -42,46 +43,64 @@ app.get('/', (req, res) => {
     res.sendFile(__dirname + '/index.html');
 });
 
-// 資料庫初始化
-const db = new sqlite3.Database(':memory:', (err) => {
-    if (err) {
-        console.error('資料庫連接失敗:', err);
-        // 不要立即退出，讓應用繼續運行
-    } else {
-        console.log('✅ 資料庫連接成功 (內存模式)');
+// 資料庫初始化 - 延遲初始化避免啟動時錯誤
+let db = null;
+
+function initDatabase() {
+    try {
+        db = new sqlite3.Database(':memory:', (err) => {
+            if (err) {
+                console.error('⚠️ 資料庫連接失敗:', err);
+                return;
+            }
+            console.log('✅ 資料庫連接成功 (內存模式)');
+            
+            // 建立資料表
+            db.serialize(() => {
+                // 用戶表
+                db.run(`CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    google_id TEXT UNIQUE NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    name TEXT NOT NULL,
+                    picture TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )`, (err) => {
+                    if (err) console.error('⚠️ 建立用戶表失敗:', err);
+                    else console.log('✅ 用戶表建立完成');
+                });
+
+                // 日記表
+                db.run(`CREATE TABLE IF NOT EXISTS entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    date TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id),
+                    UNIQUE(user_id, date)
+                )`, (err) => {
+                    if (err) console.error('⚠️ 建立日記表失敗:', err);
+                    else console.log('✅ 日記表建立完成');
+                });
+            });
+        });
+    } catch (err) {
+        console.error('⚠️ 資料庫初始化錯誤:', err);
     }
-});
+}
 
-// 建立資料表
-db.serialize(() => {
-    // 用戶表
-    db.run(`CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        google_id TEXT UNIQUE NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        name TEXT NOT NULL,
-        picture TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`, (err) => {
-        if (err) console.error('建立用戶表失敗:', err);
-        else console.log('✅ 用戶表建立完成');
-    });
+// 延遲初始化資料庫
+setTimeout(initDatabase, 1000);
 
-    // 日記表
-    db.run(`CREATE TABLE IF NOT EXISTS entries (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        date TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users (id),
-        UNIQUE(user_id, date)
-    )`, (err) => {
-        if (err) console.error('建立日記表失敗:', err);
-        else console.log('✅ 日記表建立完成');
-    });
-});
+// 資料庫檢查中間件
+const checkDatabase = (req, res, next) => {
+    if (!db) {
+        return res.status(503).json({ error: '資料庫尚未準備就緒，請稍後再試' });
+    }
+    next();
+};
 
 // JWT 驗證中間件
 const authenticateToken = (req, res, next) => {
@@ -108,7 +127,7 @@ const authenticateToken = (req, res, next) => {
 };
 
 // Google 登入
-app.post('/api/auth/google', async (req, res) => {
+app.post('/api/auth/google', checkDatabase, async (req, res) => {
     const { credential } = req.body;
 
     if (!credential) {
@@ -204,7 +223,7 @@ app.post('/api/auth/google', async (req, res) => {
 });
 
 // 獲取日記列表
-app.get('/api/entries', authenticateToken, (req, res) => {
+app.get('/api/entries', checkDatabase, authenticateToken, (req, res) => {
     const { startDate, endDate } = req.query;
 
     let query = 'SELECT date, content FROM entries WHERE user_id = ?';
@@ -227,7 +246,7 @@ app.get('/api/entries', authenticateToken, (req, res) => {
 });
 
 // 獲取特定日期的日記
-app.get('/api/entries/:date', authenticateToken, (req, res) => {
+app.get('/api/entries/:date', checkDatabase, authenticateToken, (req, res) => {
     const { date } = req.params;
 
     db.get(
@@ -244,7 +263,7 @@ app.get('/api/entries/:date', authenticateToken, (req, res) => {
 });
 
 // 儲存或更新日記
-app.post('/api/entries', authenticateToken, (req, res) => {
+app.post('/api/entries', checkDatabase, authenticateToken, (req, res) => {
     const { date, content } = req.body;
 
     if (!date) {
@@ -282,7 +301,7 @@ app.post('/api/entries', authenticateToken, (req, res) => {
 });
 
 // 刪除日記
-app.delete('/api/entries/:date', authenticateToken, (req, res) => {
+app.delete('/api/entries/:date', checkDatabase, authenticateToken, (req, res) => {
     const { date } = req.params;
 
     db.run(
@@ -299,7 +318,7 @@ app.delete('/api/entries/:date', authenticateToken, (req, res) => {
 });
 
 // 獲取統計資訊
-app.get('/api/stats', authenticateToken, (req, res) => {
+app.get('/api/stats', checkDatabase, authenticateToken, (req, res) => {
     db.all(
         `SELECT 
             COUNT(*) as total_entries,
@@ -377,13 +396,13 @@ process.on('SIGINT', () => {
     });
 });
 
-// 未捕獲的異常處理
+// 未捕獲的異常處理 - 記錄但不退出
 process.on('uncaughtException', (err) => {
-    console.error('❌ 未捕獲的異常:', err);
-    process.exit(1);
+    console.error('⚠️ 未捕獲的異常:', err);
+    // 不要立即退出，讓應用繼續運行
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ 未處理的 Promise 拒絕:', reason);
-    process.exit(1);
+    console.error('⚠️ 未處理的 Promise 拒絕:', reason);
+    // 不要立即退出，讓應用繼續運行
 });
