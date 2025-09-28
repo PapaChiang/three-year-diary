@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { Pool } = require('pg');
+const postgres = require('postgres');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 require('dotenv').config();
@@ -27,9 +27,8 @@ app.use(express.json());
 app.use(express.static('.'));
 
 // PostgreSQL 連接
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+const sql = postgres(process.env.DATABASE_URL || 'postgres://localhost:5432/diary', {
+    ssl: process.env.NODE_ENV === 'production' ? 'require' : false
 });
 
 // 資料庫初始化
@@ -38,7 +37,7 @@ async function initDatabase() {
         console.log('🔄 正在初始化資料庫...');
         
         // 建立用戶表
-        await pool.query(`
+        await sql`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
                 google_id TEXT UNIQUE NOT NULL,
@@ -47,11 +46,11 @@ async function initDatabase() {
                 picture TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        `);
+        `;
         console.log('✅ 用戶表建立完成');
 
         // 建立日記表
-        await pool.query(`
+        await sql`
             CREATE TABLE IF NOT EXISTS entries (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id),
@@ -61,7 +60,7 @@ async function initDatabase() {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, date)
             )
-        `);
+        `;
         console.log('✅ 日記表建立完成');
         
         console.log('✅ 資料庫初始化完成');
@@ -73,7 +72,7 @@ async function initDatabase() {
 // 健康檢查端點
 app.get('/health', async (req, res) => {
     try {
-        const result = await pool.query('SELECT NOW()');
+        const [result] = await sql`SELECT NOW()`;
         res.json({ 
             status: 'OK', 
             timestamp: new Date().toISOString(),
@@ -81,7 +80,7 @@ app.get('/health', async (req, res) => {
             env: process.env.NODE_ENV || 'development',
             uptime: process.uptime(),
             database: 'connected',
-            db_time: result.rows[0].now
+            db_time: result.now
         });
     } catch (err) {
         res.status(503).json({ 
@@ -154,14 +153,13 @@ app.post('/api/auth/google', async (req, res) => {
         }
 
         // 檢查用戶是否已存在
-        const existingUser = await pool.query(
-            'SELECT * FROM users WHERE google_id = $1 OR email = $2',
-            [googleId, email]
-        );
+        const existingUser = await sql`
+            SELECT * FROM users WHERE google_id = ${googleId} OR email = ${email}
+        `;
 
-        if (existingUser.rows.length > 0) {
+        if (existingUser.length > 0) {
             // 用戶已存在，直接登入
-            const user = existingUser.rows[0];
+            const user = existingUser[0];
             const token = jwt.sign({
                 id: user.id,
                 googleId: user.google_id,
@@ -179,12 +177,12 @@ app.post('/api/auth/google', async (req, res) => {
             });
         } else {
             // 新用戶，創建帳號
-            const newUser = await pool.query(
-                'INSERT INTO users (google_id, email, name, picture) VALUES ($1, $2, $3, $4) RETURNING *',
-                [googleId, email, name, picture]
-            );
+            const [user] = await sql`
+                INSERT INTO users (google_id, email, name, picture) 
+                VALUES (${googleId}, ${email}, ${name}, ${picture}) 
+                RETURNING *
+            `;
 
-            const user = newUser.rows[0];
             const token = jwt.sign({
                 id: user.id,
                 googleId,
@@ -211,19 +209,24 @@ app.post('/api/auth/google', async (req, res) => {
 app.get('/api/entries', authenticateToken, async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
-
-        let query = 'SELECT date, content FROM entries WHERE user_id = $1';
-        let params = [req.user.id];
+        let result;
 
         if (startDate && endDate) {
-            query += ' AND date BETWEEN $2 AND $3';
-            params.push(startDate, endDate);
+            result = await sql`
+                SELECT date, content FROM entries 
+                WHERE user_id = ${req.user.id} 
+                AND date BETWEEN ${startDate} AND ${endDate}
+                ORDER BY date DESC
+            `;
+        } else {
+            result = await sql`
+                SELECT date, content FROM entries 
+                WHERE user_id = ${req.user.id} 
+                ORDER BY date DESC
+            `;
         }
 
-        query += ' ORDER BY date DESC';
-
-        const result = await pool.query(query, params);
-        res.json(result.rows);
+        res.json(result);
     } catch (err) {
         console.error('獲取日記失敗:', err);
         res.status(500).json({ error: '獲取日記失敗' });
@@ -234,12 +237,12 @@ app.get('/api/entries', authenticateToken, async (req, res) => {
 app.get('/api/entries/:date', authenticateToken, async (req, res) => {
     try {
         const { date } = req.params;
-        const result = await pool.query(
-            'SELECT content FROM entries WHERE user_id = $1 AND date = $2',
-            [req.user.id, date]
-        );
+        const result = await sql`
+            SELECT content FROM entries 
+            WHERE user_id = ${req.user.id} AND date = ${date}
+        `;
         
-        res.json(result.rows.length > 0 ? result.rows[0] : { content: '' });
+        res.json(result.length > 0 ? result[0] : { content: '' });
     } catch (err) {
         console.error('獲取日記失敗:', err);
         res.status(500).json({ error: '獲取日記失敗' });
@@ -257,21 +260,21 @@ app.post('/api/entries', authenticateToken, async (req, res) => {
 
         if (!content || content.trim() === '') {
             // 如果內容為空，刪除該日記
-            await pool.query(
-                'DELETE FROM entries WHERE user_id = $1 AND date = $2',
-                [req.user.id, date]
-            );
+            await sql`
+                DELETE FROM entries 
+                WHERE user_id = ${req.user.id} AND date = ${date}
+            `;
             res.json({ message: '日記已刪除' });
             return;
         }
 
         // 使用 UPSERT (INSERT ... ON CONFLICT)
-        await pool.query(`
+        await sql`
             INSERT INTO entries (user_id, date, content, updated_at) 
-            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+            VALUES (${req.user.id}, ${date}, ${content.trim()}, CURRENT_TIMESTAMP)
             ON CONFLICT (user_id, date) 
-            DO UPDATE SET content = $3, updated_at = CURRENT_TIMESTAMP
-        `, [req.user.id, date, content.trim()]);
+            DO UPDATE SET content = ${content.trim()}, updated_at = CURRENT_TIMESTAMP
+        `;
 
         res.json({ message: '日記已儲存', date, content: content.trim() });
     } catch (err) {
@@ -284,10 +287,10 @@ app.post('/api/entries', authenticateToken, async (req, res) => {
 app.delete('/api/entries/:date', authenticateToken, async (req, res) => {
     try {
         const { date } = req.params;
-        await pool.query(
-            'DELETE FROM entries WHERE user_id = $1 AND date = $2',
-            [req.user.id, date]
-        );
+        await sql`
+            DELETE FROM entries 
+            WHERE user_id = ${req.user.id} AND date = ${date}
+        `;
         res.json({ message: '日記已刪除' });
     } catch (err) {
         console.error('刪除日記失敗:', err);
@@ -298,7 +301,7 @@ app.delete('/api/entries/:date', authenticateToken, async (req, res) => {
 // 獲取統計資訊
 app.get('/api/stats', authenticateToken, async (req, res) => {
     try {
-        const result = await pool.query(`
+        const result = await sql`
             SELECT 
                 COUNT(*) as total_entries,
                 MIN(date) as first_entry_date,
@@ -306,12 +309,12 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
                 EXTRACT(YEAR FROM date::date) as year,
                 COUNT(*) as entries_per_year
             FROM entries 
-            WHERE user_id = $1 
+            WHERE user_id = ${req.user.id} 
             GROUP BY EXTRACT(YEAR FROM date::date)
             ORDER BY year DESC
-        `, [req.user.id]);
+        `;
         
-        res.json(result.rows);
+        res.json(result);
     } catch (err) {
         console.error('獲取統計失敗:', err);
         res.status(500).json({ error: '獲取統計失敗' });
@@ -351,7 +354,7 @@ process.on('SIGTERM', () => {
     console.log('📴 收到 SIGTERM 信號，正在關閉伺服器...');
     server.close(async () => {
         console.log('✅ 伺服器已關閉');
-        await pool.end();
+        await sql.end();
         process.exit(0);
     });
 });
@@ -360,7 +363,7 @@ process.on('SIGINT', () => {
     console.log('📴 收到 SIGINT 信號，正在關閉伺服器...');
     server.close(async () => {
         console.log('✅ 伺服器已關閉');
-        await pool.end();
+        await sql.end();
         process.exit(0);
     });
 });
